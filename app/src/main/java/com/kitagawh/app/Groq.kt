@@ -8,31 +8,83 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object Groq {
-    // Change these two lines if Groq renames a model.
-    const val CHAT_MODEL = "llama-3.3-70b-versatile"
-    const val VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+    // Groq changes its model list often, so the app asks Groq which models this key can use
+    // and picks the first one it finds from these lists (best first).
+    private val CHAT_PREF = listOf(
+        "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "qwen/qwen3.6-27b",
+        "llama-3.3-70b-versatile", "llama-3.1-8b-instant"
+    )
+    private val VISION_PREF = listOf(
+        "qwen/qwen3.8-27b", "qwen/qwen3.6-27b", "meta-models/muse-spark-open",
+        "meta-llama/llama-4-scout-17b-16e-instruct"
+    )
+    private val SKIP = listOf("whisper", "guard", "safeguard", "tts", "orpheus", "compound", "embed", "prompt")
+    private const val BASE = "https://api.groq.com/openai/v1"
+
+    @Volatile private var cached: List<String> = emptyList()
+    @Volatile private var cachedAt = 0L
 
     fun msg(role: String, content: Any): JSONObject = JSONObject().put("role", role).put("content", content)
 
-    fun chat(key: String, model: String, messages: JSONArray, json: Boolean): String {
-        val body = JSONObject().put("model", model).put("messages", messages).put("temperature", 0.2)
-        if (json) body.put("response_format", JSONObject().put("type", "json_object"))
-        val con = URL("https://api.groq.com/openai/v1/chat/completions").openConnection() as HttpURLConnection
-        con.requestMethod = "POST"
+    private fun http(key: String, method: String, url: String, body: String?): Pair<Int, String> {
+        val con = URL(url).openConnection() as HttpURLConnection
+        con.requestMethod = method
         con.connectTimeout = 15000
-        con.readTimeout = 45000
-        con.doOutput = true
+        con.readTimeout = 60000
         con.setRequestProperty("Authorization", "Bearer $key")
         con.setRequestProperty("Content-Type", "application/json")
         try {
-            con.outputStream.use { it.write(body.toString().toByteArray()) }
+            if (body != null) {
+                con.doOutput = true
+                con.outputStream.use { it.write(body.toByteArray()) }
+            }
             val code = con.responseCode
             val txt = (if (code in 200..299) con.inputStream else con.errorStream)?.bufferedReader()?.readText() ?: ""
-            if (code !in 200..299) throw IOException(friendly(code, txt))
-            return JSONObject(txt).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
+            return code to txt
         } finally {
             con.disconnect()
         }
+    }
+
+    fun available(key: String): List<String> {
+        if (cached.isNotEmpty() && System.currentTimeMillis() - cachedAt < 600000) return cached
+        val (code, txt) = http(key, "GET", "$BASE/models", null)
+        if (code !in 200..299) throw IOException(friendly(code, txt))
+        val arr = JSONObject(txt).getJSONArray("data")
+        val ids = (0 until arr.length()).map { arr.getJSONObject(it).getString("id") }
+        cached = ids
+        cachedAt = System.currentTimeMillis()
+        return ids
+    }
+
+    private fun candidates(key: String, vision: Boolean): List<String> {
+        val ids = available(key)
+        val picked = (if (vision) VISION_PREF else CHAT_PREF).filter { it in ids }
+        if (vision) return picked
+        val rest = ids.filter { id -> id !in picked && SKIP.none { id.contains(it) } }
+        return picked + rest.take(3)
+    }
+
+    fun chat(key: String, messages: JSONArray, json: Boolean, vision: Boolean = false): String {
+        val models = candidates(key, vision)
+        if (models.isEmpty()) {
+            throw IOException(if (vision) "Your Groq key has no image model right now, so Screen search cannot run." else "Your Groq key has no chat model available.")
+        }
+        var last = "Groq has no usable model for this key."
+        for (m in models) {
+            val body = JSONObject().put("model", m).put("messages", messages).put("temperature", 0.2)
+            if (json) body.put("response_format", JSONObject().put("type", "json_object"))
+            if (m.startsWith("openai/gpt-oss")) body.put("reasoning_effort", "low")
+            val (code, txt) = http(key, "POST", "$BASE/chat/completions", body.toString())
+            if (code in 200..299) {
+                val c = JSONObject(txt).getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content", "")
+                return c.replace(Regex("(?s)<think>.*?</think>"), "").trim()
+            }
+            last = friendly(code, txt)
+            if (code == 404 || code == 400 || code == 403) continue // model gone or not allowed: try the next one
+            throw IOException(last)
+        }
+        throw IOException(last)
     }
 
     private fun friendly(code: Int, txt: String): String = when (code) {
@@ -40,7 +92,7 @@ object Groq {
         413 -> "That request was too large for Groq."
         429 -> "Groq rate limit reached. Wait a minute and try again."
         in 500..599 -> "Groq is having trouble right now. Try again shortly."
-        else -> "Groq error $code: " + (try { JSONObject(txt).getJSONObject("error").getString("message") } catch (e: Exception) { txt }).take(120)
+        else -> "Groq error $code: " + (try { JSONObject(txt).getJSONObject("error").getString("message") } catch (e: Exception) { txt }).take(140)
     }
 }
 
@@ -89,7 +141,7 @@ Rules:
             val screen = acc.dumpScreen()
             val prompt = "TASK: $task\n\nACTIONS SO FAR:\n${if (history.isEmpty()) "(none)" else history}\nCURRENT SCREEN:\n$screen\n\nReply with the next JSON action."
             val reply = try {
-                Groq.chat(key, Groq.CHAT_MODEL, JSONArray().put(Groq.msg("system", SYSTEM)).put(Groq.msg("user", prompt)), true)
+                Groq.chat(key, JSONArray().put(Groq.msg("system", SYSTEM)).put(Groq.msg("user", prompt)), true)
             } catch (e: Exception) {
                 return e.message ?: "Could not reach Groq. Check your internet."
             }
@@ -117,6 +169,6 @@ Rules:
             .put(JSONObject().put("type", "text").put("text",
                 "This is a phone screenshot. In at most 5 short plain sentences, say what is on the screen and what the main thing is (an app, a person, a product, a place, an error). If it is something people look up, say what it is and one useful fact."))
             .put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$b64")))
-        return Groq.chat(key, Groq.VISION_MODEL, JSONArray().put(Groq.msg("user", content)), false).trim()
+        return Groq.chat(key, JSONArray().put(Groq.msg("user", content)), false, vision = true).trim()
     }
 }

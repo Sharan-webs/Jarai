@@ -17,6 +17,8 @@ Either enable Master access (Shizuku) on the Permissions page, or run once from 
     adb shell pm grant com.kitagawh.app android.permission.WRITE_SECURE_SETTINGS
 After that the app re-enables its own Accessibility service the moment it is switched off.
 
-## Models (change in Groq.kt if Groq renames them)
-Brain: llama-3.3-70b-versatile
-Screen search (vision): meta-llama/llama-4-scout-17b-16e-instruct
+## Models
+Groq changes its list often. The app asks Groq (GET /openai/v1/models) which models your key can use and picks automatically.
+Chat order: openai/gpt-oss-120b, openai/gpt-oss-20b, qwen/qwen3.8-27b, qwen/qwen3.6-27b, llama-3.3-70b-versatile
+Vision order (Screen search): qwen/qwen3.8-27b, qwen/qwen3.6-27b, meta-models/muse-spark-open
+Edit the two lists at the top of Groq.kt to change this.
