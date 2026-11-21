@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
@@ -281,6 +282,17 @@ class JarvisOverlay(private val ctx: Context, private val onX: () -> Unit) {
             pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f * d, 9f * d), 0f)
         }
         private val oval = RectF()
+        private val pScrim = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
+            super.onSizeChanged(w, h, ow, oh)
+            // soft dark fade: clear at the top edge, deep at the bottom, so the overlay reads cleanly on any app
+            pScrim.shader = LinearGradient(
+                0f, 0f, 0f, h.toFloat(),
+                intArrayOf(0x00000000, 0x99050612.toInt(), 0xF2030409.toInt()),
+                floatArrayOf(0f, 0.34f, 1f), Shader.TileMode.CLAMP
+            )
+        }
 
         init {
             val g = 2.399963f
@@ -307,6 +319,8 @@ class JarvisOverlay(private val ctx: Context, private val onX: () -> Unit) {
             shift += ((if (mode == 3) 1f else 0f) - shift) * 0.08f
             val c1 = if (mode == 2) 0xFFFF5C7A.toInt() else 0xFF7C8CFF.toInt()
             val c2 = if (mode == 2) 0xFFFFA06C.toInt() else 0xFF4FD8FF.toInt()
+
+            c.drawRect(0f, 0f, w, h, pScrim)
 
             // bottom glow
             pGlow.shader = RadialGradient(w / 2f, h, w * 0.95f * (0.9f + 0.1f * sin(t * 0.8f)),

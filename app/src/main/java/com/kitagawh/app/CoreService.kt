@@ -100,6 +100,7 @@ class CoreService : Service() {
     private var tts: TextToSpeech? = null
     private var session = 0
     private var working = false
+    private var taskStartedAt = 0L
     private var focus: AudioFocusRequest? = null
     private var observer: ContentObserver? = null
     private val wakeRunnable = Runnable { startWake() }
@@ -189,11 +190,15 @@ class CoreService : Service() {
     }
 
     private fun notifyAccessOff() {
-        val pi = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val pi = PendingIntent.getActivity(
+            this, 1, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE
+        )
         val n = Notification.Builder(this, "alert")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Accessibility was turned off")
-            .setContentText("Jarvis is blind without it. Tap to switch it back on.")
+            .setContentText("Tap to open Accessibility settings and switch Kitagawh! back on.")
+            .setAutoCancel(true)
             .setContentIntent(pi)
             .setOnlyAlertOnce(true)
             .build()
@@ -340,7 +345,7 @@ class CoreService : Service() {
 
             override fun onError(error: Int) {
                 if (woke) {
-                    if (overlay != null) listenCommand(session)
+                    if (overlay != null && !working) listenCommand(session)
                 } else restartWake(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1500 else 350)
             }
         })
@@ -394,17 +399,23 @@ class CoreService : Service() {
     private fun runTask(cmd: String, sid: Int) {
         if (sid != session) return
         working = true
+        taskStartedAt = System.currentTimeMillis()
+        focusOff() // let the app you open play its own sound
         overlay?.setTitle(cmd)
-        overlay?.setSub("Working on it. Say stop or give me something new.")
+        overlay?.setSub("Working on it. Say stop, or say Jarvis and a new task.")
         overlay?.thinking()
-        listenInterrupt(sid)
+        main.postDelayed({ listenInterrupt(sid) }, 900)
         Thread {
-            val err = Agent.run(
-                this@CoreService, cmd,
-                { s -> main.post { if (sid == session) overlay?.setSub(s) } },
-                { s -> main.post { if (sid == session) speak(s) } },
-                { sid != session }
-            )
+            val err: String? = try {
+                Agent.run(
+                    this@CoreService, cmd,
+                    { s -> main.post { if (sid == session) overlay?.setSub(s) } },
+                    { s -> main.post { if (sid == session) speak(s) } },
+                    { sid != session }
+                )
+            } catch (e: Throwable) {
+                "Unexpected error: " + (e.message ?: e.javaClass.simpleName)
+            }
             main.post {
                 if (sid == session) {
                     working = false
@@ -429,7 +440,7 @@ class CoreService : Service() {
             override fun onRmsChanged(rmsdB: Float) { if (tts?.isSpeaking != true) overlay?.level(rmsdB) }
 
             override fun onPartialResults(partialResults: Bundle?) {
-                if (sid != session || tts?.isSpeaking == true) return
+                if (sid != session || tts?.isSpeaking == true || System.currentTimeMillis() - taskStartedAt < 1500) return
                 val t = first(partialResults) ?: return
                 val c = if (hasWake(t)) afterWake(t) else t
                 if (isStop(c)) stopTask(sid)
@@ -437,13 +448,14 @@ class CoreService : Service() {
 
             override fun onResults(results: Bundle?) {
                 if (sid != session || !working) return
-                if (tts?.isSpeaking == true) { again(sid); return }
+                if (tts?.isSpeaking == true || System.currentTimeMillis() - taskStartedAt < 1500) { again(sid); return }
                 val t = first(results)
                 if (t.isNullOrBlank()) { again(sid); return }
-                val c = if (hasWake(t)) afterWake(t) else t
+                val woke = hasWake(t)
+                val c = if (woke) afterWake(t) else t
                 when {
                     isStop(c) -> stopTask(sid)
-                    c.length >= 2 -> {
+                    woke && c.length >= 2 -> {
                         val nsid = ++session
                         overlay?.setTitle(c)
                         runTask(c, nsid)
