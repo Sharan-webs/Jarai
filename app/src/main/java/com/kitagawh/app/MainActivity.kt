@@ -83,6 +83,7 @@ fun KApp(act: MainActivity) {
     // if a required permission is lost while using the app, go back to the permission page
     LaunchedEffect(base) {
         if (base == "home") {
+            CoreService.sync(act)
             while (true) {
                 delay(1500)
                 if (!Perms.allRequiredGranted(act)) { reset("perms"); break }

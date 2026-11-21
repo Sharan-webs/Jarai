@@ -43,6 +43,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.TextButton
@@ -100,19 +103,37 @@ private fun ScrollHint() {
 }
 
 @Composable
-private fun LazyItemScope.Hero() {
+private fun Chip(label: String, on: Boolean) {
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(C.card2).border(1.dp, C.line, RoundedCornerShape(50))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PulseDot(if (on) C.ok else C.dim)
+        Spacer(Modifier.width(8.dp))
+        Text(label, color = C.dim, fontSize = 12.sp, fontFamily = FontFamily.Monospace, letterSpacing = 0.8.sp)
+    }
+}
+
+@Composable
+private fun LazyItemScope.Hero(jarvisOn: Boolean, etOn: Boolean) {
     Column(
         Modifier.fillMaxWidth().fillParentMaxHeight(0.94f),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
     ) {
-        Sphere(Modifier.fillMaxWidth().height(380.dp))
-        Row {
-            "Kitagawh!".forEachIndexed { i, ch -> Reveal(500 + i * 90) { T(ch.toString(), 42, FontWeight.Light, spacing = 2f) } }
-        }
+        Sphere(Modifier.fillMaxWidth().height(400.dp))
+        Reveal(500) { ShimmerText("Kitagawh!", 44) }
         Spacer(Modifier.height(8.dp))
-        Reveal(1500) { T("Your Master Bot. Say the word.", 15, color = C.dim, spacing = 0.6f) }
-        Spacer(Modifier.height(36.dp))
-        Reveal(2100) { ScrollHint() }
+        Reveal(1300) { T("Your Master Bot. Say the word.", 15, color = C.dim, spacing = 0.6f) }
+        Spacer(Modifier.height(18.dp))
+        Reveal(1700) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Chip(if (jarvisOn) "jarvis online" else "jarvis offline", jarvisOn)
+                Chip(if (etOn) "easy touch on" else "easy touch off", etOn)
+            }
+        }
+        Spacer(Modifier.height(30.dp))
+        Reveal(2200) { ScrollHint() }
     }
 }
 
@@ -126,7 +147,7 @@ fun HomeScreen(ctx: Context, onSettings: () -> Unit, onJarvis: () -> Unit, onEtU
     Box(Modifier.fillMaxSize()) {
         Aura(Modifier.fillMaxSize())
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 70.dp)) {
-            item { Hero() }
+            item { Hero(jarvisOn, etOn) }
             item {
                 Reveal {
                     KCard(borderColor = C.a1.copy(alpha = 0.35f)) {

@@ -250,7 +250,7 @@ class FloatingIconView(ctx: Context, private val sizePx: Int, private val color:
     }
 }
 
-/** The Jarvis overlay: glow and animated bars at the bottom, status text, and an X button at the top. */
+/** The Jarvis overlay: a rotating sphere with radial and bottom spectrum, status text, and an X button at the top. */
 class JarvisOverlay(private val ctx: Context, private val onX: () -> Unit) {
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val dp = ctx.resources.displayMetrics.density
@@ -259,37 +259,139 @@ class JarvisOverlay(private val ctx: Context, private val onX: () -> Unit) {
     private val xBtn = XButton(ctx)
     private var added = false
 
-    private class GlowView(ctx: Context) : View(ctx) {
+    private class HudView(ctx: Context) : View(ctx) {
         var level = 0f
-        var mode = 0 // 0 listening, 1 thinking, 2 error, 3 text
-        private var t = 0f
-        private val cur = FloatArray(5) { 10f }
-        private val glowP = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val barP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        var mode = 0 // 0 listening, 1 working, 2 error, 3 text
         private val d = ctx.resources.displayMetrics.density
-        private val mult = floatArrayOf(0.25f, 0.55f, 1f, 0.55f, 0.25f)
+        private var t = 0f
+        private var rot = 0f
+        private var shift = 0f
+        private var sLevel = 0f
+        private val n = 340
+        private val pts = FloatArray(n * 3)
+        private val bars = 72
+        private val amp = FloatArray(bars)
+        private val amp2 = FloatArray(44)
+        private val pPoint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val pLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+        private val pGlow = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val pRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private val pDash = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f * d, 9f * d), 0f)
+        }
+        private val oval = RectF()
+
+        init {
+            val g = 2.399963f
+            for (i in 0 until n) {
+                val y = 1f - 2f * (i + 0.5f) / n
+                val r = kotlin.math.sqrt(1f - y * y)
+                pts[i * 3] = cos(g * i) * r; pts[i * 3 + 1] = y; pts[i * 3 + 2] = sin(g * i) * r
+            }
+        }
+
+        private fun withA(c: Int, a: Int) = (c and 0x00FFFFFF) or (a.coerceIn(0, 255) shl 24)
+        private fun mix(a: Int, b: Int, f: Float): Int {
+            val k = f.coerceIn(0f, 1f)
+            val r = ((a shr 16 and 255) * (1 - k) + (b shr 16 and 255) * k).toInt()
+            val g = ((a shr 8 and 255) * (1 - k) + (b shr 8 and 255) * k).toInt()
+            val bl = ((a and 255) * (1 - k) + (b and 255) * k).toInt()
+            return (255 shl 24) or (r shl 16) or (g shl 8) or bl
+        }
 
         override fun onDraw(c: Canvas) {
-            t += 0.06f
+            t += 0.05f
             val w = width.toFloat(); val h = height.toFloat()
-            val pulse = 0.88f + 0.12f * sin(t * 0.8f)
-            val core = if (mode == 2) 0xDDFF4F6E.toInt() else 0xDD6C7BFF.toInt()
-            val mid = if (mode == 2) 0x66B02A45 else 0x666E4BFF
-            glowP.shader = RadialGradient(w / 2f, h, w * pulse, intArrayOf(core, mid, 0x00000000), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
-            c.drawRect(0f, 0f, w, h, glowP)
-            if (mode != 3) {
-                for (i in 0..4) {
-                    val wave = 0.6f + 0.4f * sin(t * 3f + i * 1.3f)
+            sLevel += (level - sLevel) * 0.25f
+            shift += ((if (mode == 3) 1f else 0f) - shift) * 0.08f
+            val c1 = if (mode == 2) 0xFFFF5C7A.toInt() else 0xFF7C8CFF.toInt()
+            val c2 = if (mode == 2) 0xFFFFA06C.toInt() else 0xFF4FD8FF.toInt()
+
+            // bottom glow
+            pGlow.shader = RadialGradient(w / 2f, h, w * 0.95f * (0.9f + 0.1f * sin(t * 0.8f)),
+                intArrayOf(withA(c1, 0xCC), withA(c1, 0x44), 0), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, w, h, pGlow)
+
+            val cx = w / 2f
+            val cy = h * (0.36f - 0.18f * shift)
+            val rad = min(w * 0.24f, h * 0.17f) * (1f - 0.35f * shift)
+            rot += when (mode) { 0 -> 0.012f + sLevel * 0.05f; 1 -> 0.045f; 2 -> 0.004f; else -> 0.01f }
+
+            // halo
+            pGlow.shader = RadialGradient(cx, cy, rad * 2.2f,
+                intArrayOf(withA(c1, (90 * (0.6f + 0.4f * sLevel)).toInt()), withA(c2, 0x20), 0),
+                floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
+            c.drawCircle(cx, cy, rad * 2.2f, pGlow)
+
+            // radial spectrum
+            val r0 = rad * 1.32f
+            for (i in 0 until bars) {
+                val target = when (mode) {
+                    0 -> sLevel * (0.3f + 0.7f * abs(sin(t * 2.1f + i * 0.45f)) * abs(cos(t * 1.3f + i * 0.21f))) + 0.04f
+                    1 -> (0.5f + 0.5f * sin(t * 2.6f - i * 0.25f)) * 0.45f + 0.05f
+                    else -> 0.05f
+                }
+                amp[i] += (target - amp[i]) * 0.35f
+                val a = i * 2f * PI.toFloat() / bars + rot * 0.3f
+                val len = rad * (0.08f + 0.55f * amp[i])
+                pLine.color = withA(mix(c1, c2, i.toFloat() / bars), 215)
+                pLine.strokeWidth = 2.8f * d
+                c.drawLine(cx + cos(a) * r0, cy + sin(a) * r0, cx + cos(a) * (r0 + len), cy + sin(a) * (r0 + len), pLine)
+            }
+
+            // dashed rings
+            c.save(); c.rotate(t * 9f, cx, cy)
+            pDash.color = withA(c2, 120); pDash.strokeWidth = 1.6f * d
+            c.drawCircle(cx, cy, rad * 1.88f, pDash)
+            c.restore()
+            c.save(); c.rotate(-t * 14f, cx, cy)
+            pRing.color = withA(c1, 190); pRing.strokeWidth = 2.2f * d; pRing.strokeCap = Paint.Cap.ROUND
+            oval.set(cx - rad * 1.98f, cy - rad * 1.98f, cx + rad * 1.98f, cy + rad * 1.98f)
+            c.drawArc(oval, 0f, 46f, false, pRing); c.drawArc(oval, 120f, 28f, false, pRing); c.drawArc(oval, 240f, 62f, false, pRing)
+            c.restore()
+
+            // orbit ovals
+            pRing.color = withA(c2, 80); pRing.strokeWidth = 1.2f * d
+            for (k in 0..1) {
+                c.save(); c.rotate((if (k == 0) 1 else -1) * (rot * 40f) + k * 60f, cx, cy)
+                oval.set(cx - rad * 1.16f, cy - rad * 0.3f, cx + rad * 1.16f, cy + rad * 0.3f)
+                c.drawOval(oval, pRing)
+                c.restore()
+            }
+
+            // sphere points
+            val cr = cos(rot); val sr = sin(rot)
+            val tilt = 0.4f + 0.12f * sin(t * 0.4f); val ct = cos(tilt); val st = sin(tilt)
+            val re = rad * (1f + 0.07f * sLevel)
+            for (i in 0 until n) {
+                val x = pts[i * 3]; val y = pts[i * 3 + 1]; val z = pts[i * 3 + 2]
+                val x1 = x * cr + z * sr; val z1 = -x * sr + z * cr
+                val y2 = y * ct - z1 * st; val z2 = y * st + z1 * ct
+                val depth = (z2 + 1f) / 2f
+                pPoint.color = withA(mix(c1, c2, depth), (50 + 205 * depth).toInt())
+                c.drawCircle(cx + x1 * re, cy + y2 * re, (0.7f + 2.4f * depth) * d, pPoint)
+            }
+
+            // bottom spectrum
+            if (shift < 0.6f) {
+                val m = amp2.size
+                val by = h * 0.72f
+                val bw = w * 0.62f / m
+                val sx = w / 2f - w * 0.31f
+                for (i in 0 until m) {
+                    val env = 1f - abs(i - m / 2f) / (m / 2f) * 0.7f
                     val target = when (mode) {
-                        0 -> 10f * d + level * mult[i] * 70f * d * wave
-                        1 -> 10f * d + (0.5f + 0.5f * sin(t * 2.2f - i * 0.8f)) * 46f * d * mult[i]
-                        else -> 10f * d
+                        0 -> sLevel * (0.35f + 0.65f * abs(sin(t * 2.4f + i * 0.5f))) * env + 0.03f
+                        1 -> (0.5f + 0.5f * sin(t * 3f - i * 0.35f)) * 0.5f * env + 0.03f
+                        else -> 0.03f
                     }
-                    cur[i] += (target - cur[i]) * 0.3f
-                    val x = w / 2f + (i - 2) * 24f * d
-                    val y = h * 0.5f
-                    barP.alpha = if (mode == 2) 150 else 235
-                    c.drawRoundRect(x - 5f * d, y - cur[i] / 2f, x + 5f * d, y + cur[i] / 2f, 5f * d, 5f * d, barP)
+                    amp2[i] += (target - amp2[i]) * 0.35f
+                    val hh = 4f * d + amp2[i] * 56f * d
+                    pLine.color = withA(mix(c1, c2, i.toFloat() / m), ((1f - shift * 1.6f) * 230).toInt())
+                    pLine.strokeWidth = bw * 0.55f
+                    val x = sx + i * bw + bw / 2f
+                    c.drawLine(x, by - hh / 2f, x, by + hh / 2f, pLine)
                 }
             }
             postInvalidateOnAnimation()
@@ -297,20 +399,24 @@ class JarvisOverlay(private val ctx: Context, private val onX: () -> Unit) {
     }
 
     private class Panel(ctx: Context) : FrameLayout(ctx) {
-        val glow = GlowView(ctx)
+        val hud = HudView(ctx)
+        val label = TextView(ctx)
         val title = TextView(ctx)
         val sub = TextView(ctx)
         init {
             val d = ctx.resources.displayMetrics.density
-            addView(glow, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(hud, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            label.setTextColor(0xFF4FD8FF.toInt()); label.textSize = 11f; label.gravity = Gravity.CENTER
+            label.typeface = Typeface.MONOSPACE; label.letterSpacing = 0.35f
             title.setTextColor(Color.WHITE); title.textSize = 24f; title.gravity = Gravity.CENTER
-            title.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-            sub.setTextColor(0xFFB9BEDF.toInt()); sub.textSize = 14f; sub.gravity = Gravity.CENTER
+            title.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL); title.letterSpacing = 0.04f
+            sub.setTextColor(0xFFB9BEDF.toInt()); sub.textSize = 13f; sub.gravity = Gravity.CENTER
+            sub.typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-                setPadding((28 * d).toInt(), 0, (28 * d).toInt(), (84 * d).toInt())
+                setPadding((28 * d).toInt(), 0, (28 * d).toInt(), (52 * d).toInt())
             }
-            col.addView(title); col.addView(sub)
+            col.addView(label); col.addView(title); col.addView(sub)
             addView(col, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         }
     }
@@ -334,7 +440,7 @@ class JarvisOverlay(private val ctx: Context, private val onX: () -> Unit) {
         val m = ctx.resources.displayMetrics
         val flagsBase = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
         val pp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT, (m.heightPixels * 0.52f).toInt(),
+            WindowManager.LayoutParams.MATCH_PARENT, (m.heightPixels * 0.66f).toInt(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             flagsBase or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE, PixelFormat.TRANSLUCENT
         )
@@ -346,35 +452,39 @@ class JarvisOverlay(private val ctx: Context, private val onX: () -> Unit) {
         xp.gravity = Gravity.TOP or Gravity.START
         xp.x = (18 * dp).toInt(); xp.y = (46 * dp).toInt()
         xBtn.setOnClickListener { onX() }
-        panel.alpha = 0f; panel.translationY = 120 * dp
+        panel.alpha = 0f; panel.translationY = 140 * dp
         xBtn.alpha = 0f
         try {
             wm.addView(panel, pp); wm.addView(xBtn, xp); added = true
         } catch (e: Exception) { return }
-        panel.animate().alpha(1f).translationY(0f).setDuration(420).start()
-        xBtn.animate().alpha(1f).setDuration(420).start()
+        panel.animate().alpha(1f).translationY(0f).setDuration(480).start()
+        xBtn.animate().alpha(1f).setDuration(480).start()
         setTitle("")
         setSub("")
+        setLabel("listening")
     }
 
+    private fun setLabel(t: String) { main.post { panel.label.text = t } }
     fun setTitle(t: String) { main.post { panel.title.textSize = 24f; panel.title.maxLines = 3; panel.title.text = t } }
     fun setSub(t: String) { main.post { panel.sub.text = t } }
-    fun listening() { main.post { panel.glow.mode = 0 } }
-    fun thinking() { main.post { panel.glow.mode = 1 } }
-    fun level(rms: Float) { panel.glow.level = ((rms + 2f) / 12f).coerceIn(0f, 1f) }
-    fun error(t: String) { main.post { panel.glow.mode = 2; panel.title.textSize = 20f; panel.title.text = "Something went wrong"; panel.sub.text = t } }
+    fun listening() { main.post { panel.hud.mode = 0; panel.label.text = "listening" } }
+    fun thinking() { main.post { panel.hud.mode = 1; panel.label.text = "working" } }
+    fun level(rms: Float) { panel.hud.level = ((rms + 2f) / 12f).coerceIn(0f, 1f) }
+    fun error(t: String) {
+        main.post { panel.hud.mode = 2; panel.label.text = "error"; panel.title.textSize = 20f; panel.title.text = "Something went wrong"; panel.sub.text = t }
+    }
     fun showText(t: String) {
-        main.post { panel.glow.mode = 3; panel.title.textSize = 16f; panel.title.maxLines = 9; panel.title.text = t; panel.sub.text = "" }
+        main.post { panel.hud.mode = 3; panel.label.text = "screen search"; panel.title.textSize = 16f; panel.title.maxLines = 9; panel.title.text = t; panel.sub.text = "" }
     }
 
     fun close() {
         if (!added) return
         added = false
-        panel.animate().alpha(0f).translationY(100 * dp).setDuration(260).start()
+        panel.animate().alpha(0f).translationY(110 * dp).setDuration(280).start()
         xBtn.animate().alpha(0f).setDuration(200).start()
         main.postDelayed({
             try { wm.removeView(panel) } catch (e: Exception) { }
             try { wm.removeView(xBtn) } catch (e: Exception) { }
-        }, 300)
+        }, 320)
     }
 }

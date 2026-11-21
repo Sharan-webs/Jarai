@@ -30,7 +30,7 @@ enum class Perm(val title: String, val desc: String, val optional: Boolean = fal
     BATTERY("Run in background", "Keeps Jarvis and Easy Touch alive after the app is closed."),
     MASTER(
         "Master access (Shizuku, optional)",
-        "Install and start the Shizuku app, then tap here and allow it. Kitagawh then grants itself every permission and keeps Accessibility locked on.",
+        "Install and start the Shizuku app, then tap here and allow it. Kitagawh then grants itself every permission and switches Accessibility back on by itself every 10 seconds if it is ever turned off.",
         true
     )
 }
@@ -151,6 +151,8 @@ object Perms {
 
 /** Runs privileged commands through Shizuku and keeps Accessibility switched on. */
 object Master {
+    private const val WSS = "android.permission.WRITE_SECURE_SETTINGS"
+
     fun sh(cmd: String): String = try {
         val m = Shizuku::class.java.getDeclaredMethod(
             "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
@@ -183,23 +185,37 @@ object Master {
         }.start()
     }
 
-    /** Works once WRITE_SECURE_SETTINGS is granted (by Shizuku or adb). */
+    private fun merged(c: Context): String {
+        val cn = ComponentName(c, KitaAccessibilityService::class.java).flattenToString()
+        val cur = Settings.Secure.getString(c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+        return if (cur.split(':').any { it.equals(cn, true) }) cur else if (cur.isBlank()) cn else "$cur:$cn"
+    }
+
+    /**
+     * Switches the Accessibility service back on by itself.
+     * Works when WRITE_SECURE_SETTINGS is granted (one adb command) or Shizuku is running.
+     * Returns false when Android gives us no way to do it.
+     */
     fun keepAccessibility(c: Context): Boolean {
-        if (c.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") != PackageManager.PERMISSION_GRANTED) return false
-        return try {
-            val cn = ComponentName(c, KitaAccessibilityService::class.java).flattenToString()
-            val cur = Settings.Secure.getString(c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-            if (cur.split(':').none { it.equals(cn, true) }) {
-                Settings.Secure.putString(
-                    c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                    if (cur.isBlank()) cn else "$cur:$cn"
-                )
+        val list = merged(c)
+        if (c.checkSelfPermission(WSS) == PackageManager.PERMISSION_GRANTED) {
+            return try {
+                Settings.Secure.putString(c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, list)
+                Settings.Secure.putInt(c.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                true
+            } catch (e: Exception) {
+                false
             }
-            Settings.Secure.putInt(c.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            true
-        } catch (e: Exception) {
-            false
         }
+        if (Perms.shizukuAlive() && Perms.masterOn(c)) {
+            Thread {
+                sh("pm grant ${c.packageName} android.permission.WRITE_SECURE_SETTINGS")
+                sh("settings put secure enabled_accessibility_services $list")
+                sh("settings put secure accessibility_enabled 1")
+            }.start()
+            return true
+        }
+        return false
     }
 }
 

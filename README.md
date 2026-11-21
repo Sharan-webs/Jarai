@@ -1,4 +1,4 @@
-# Kitagawh!
+# Jarai (app name: Kitagawh!)
 
 Jarvis-style Android assistant. Kotlin + Jetpack Compose. Package: com.kitagawh.app
 
@@ -22,3 +22,8 @@ Groq changes its list often. The app asks Groq (GET /openai/v1/models) which mod
 Chat order: openai/gpt-oss-120b, openai/gpt-oss-20b, qwen/qwen3.8-27b, qwen/qwen3.6-27b, llama-3.3-70b-versatile
 Vision order (Screen search): qwen/qwen3.8-27b, qwen/qwen3.6-27b, meta-models/muse-spark-open
 Edit the two lists at the top of Groq.kt to change this.
+
+## Voice behaviour
+- Say "Jarvis" (or "hey Jarvis"). The overlay opens on the first words you speak, and the same listener keeps going, so "Jarvis open YouTube" works in one breath.
+- While a task is running Jarvis keeps listening on the side. Say "stop" / "cancel" / "never mind" to stop it, or just say a new command to replace the current task.
+- Accessibility is checked every 10 seconds and instantly on change. It switches itself back on if the app holds WRITE_SECURE_SETTINGS (one adb command above) or Shizuku is running. Without either, Android does not allow it and you get a notification instead.

@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -42,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -174,10 +176,41 @@ fun KCard(
     modifier: Modifier = Modifier, borderColor: Color = C.line, onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val t = rememberInfiniteTransition(label = "kc")
+    val ang by t.animateFloat(0f, 360f, infiniteRepeatable(tween(7000, easing = LinearEasing)), label = "ang")
+    val accent = if (borderColor == C.line) C.a1.copy(alpha = 0.75f) else borderColor
     val base = if (onClick != null) modifier.fillMaxWidth().bounceClick(onClick = onClick) else modifier.fillMaxWidth()
-    Column(
-        base.clip(RoundedCornerShape(22.dp)).background(C.card).border(1.dp, borderColor, RoundedCornerShape(22.dp)).padding(18.dp),
-        content = content
+    Box(
+        base.clip(RoundedCornerShape(22.dp)).drawBehind {
+            drawRect(C.line)
+            val big = maxOf(size.width, size.height)
+            rotate(ang, center) {
+                drawRect(
+                    Brush.sweepGradient(listOf(Color.Transparent, accent, C.a2.copy(alpha = 0.5f), Color.Transparent, Color.Transparent), center),
+                    topLeft = Offset(center.x - big, center.y - big),
+                    size = androidx.compose.ui.geometry.Size(big * 2, big * 2)
+                )
+            }
+        }.padding(1.2.dp)
+    ) {
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(21.dp)).background(C.card).padding(18.dp),
+            content = content
+        )
+    }
+}
+
+/** Gradient text that shimmers. */
+@Composable
+fun ShimmerText(text: String, size: Int, modifier: Modifier = Modifier) {
+    val t = rememberInfiniteTransition(label = "sh")
+    val x by t.animateFloat(-300f, 1000f, infiniteRepeatable(tween(3400, easing = LinearEasing)), label = "x")
+    Text(
+        text, modifier,
+        style = TextStyle(
+            brush = Brush.linearGradient(listOf(C.text, C.a2, C.a1, C.text), start = Offset(x, 0f), end = Offset(x + 520f, 0f)),
+            fontSize = size.sp, fontWeight = FontWeight.Light, letterSpacing = 3.sp
+        )
     )
 }
 
@@ -238,6 +271,7 @@ fun Sphere(modifier: Modifier = Modifier, scale: Float = 0.36f) {
     val rot by t.animateFloat(0f, (2 * PI).toFloat(), infiniteRepeatable(tween(18000, easing = LinearEasing)), label = "r")
     val pulse by t.animateFloat(0.82f, 1f, infiniteRepeatable(tween(2800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p")
     val ringRot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(26000, easing = LinearEasing)), label = "rr")
+    val ph by t.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing)), label = "ph")
     val pts = remember { fib(280) }
     Canvas(modifier) {
         val r = size.minDimension * scale
@@ -251,6 +285,26 @@ fun Sphere(modifier: Modifier = Modifier, scale: Float = 0.36f) {
         }
         rotate(-ringRot * 0.7f + 40f, c) {
             drawOval(C.a1.copy(alpha = 0.30f), Offset(c.x - r * 1.2f, c.y - r * 0.28f), androidx.compose.ui.geometry.Size(r * 2.4f, r * 0.56f), style = Stroke(1.2.dp.toPx()))
+        }
+        // radial spectrum
+        val bars = 64
+        val spin = ph * 2f * PI.toFloat()
+        for (i in 0 until bars) {
+            val a = i * 2f * PI.toFloat() / bars + rot * 0.25f
+            val e = 0.5f + 0.5f * sin(spin + i * 0.55f)
+            val e2 = 0.5f + 0.5f * sin(spin * 2f + i * 0.21f)
+            val len = r * (0.06f + 0.26f * e * e2)
+            val r0 = r * 1.42f
+            drawLine(
+                lerp(C.a1, C.a2, i / bars.toFloat()).copy(alpha = 0.85f),
+                Offset(c.x + cos(a) * r0, c.y + sin(a) * r0),
+                Offset(c.x + cos(a) * (r0 + len), c.y + sin(a) * (r0 + len)),
+                2.2.dp.toPx(), StrokeCap.Round
+            )
+        }
+        rotate(-ringRot * 1.4f, c) {
+            drawArc(C.a2.copy(alpha = 0.55f), 0f, 50f, false, Offset(c.x - r * 1.9f, c.y - r * 1.9f), androidx.compose.ui.geometry.Size(r * 3.8f, r * 3.8f), style = Stroke(1.8.dp.toPx(), cap = StrokeCap.Round))
+            drawArc(C.a1.copy(alpha = 0.55f), 170f, 70f, false, Offset(c.x - r * 1.9f, c.y - r * 1.9f), androidx.compose.ui.geometry.Size(r * 3.8f, r * 3.8f), style = Stroke(1.8.dp.toPx(), cap = StrokeCap.Round))
         }
         val cr = cos(rot); val sr = sin(rot); val tilt = 0.38f; val ct = cos(tilt); val st = sin(tilt)
         for (i in 0 until pts.size / 3) {
